@@ -1,0 +1,14 @@
+.git
+.analysis
+.starter-audit
+__pycache__
+*.pyc
+*.pyo
+sample
+sample_output.jsonl
+selector.err
+cpu_measure.txt
+output.jsonl
+.pytest_cache
+.coverage
+.coverage*

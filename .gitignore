@@ -1,0 +1,14 @@
+.analysis/
+.starter-audit/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage*
+output.jsonl
+sample_output.jsonl
+run*.jsonl
+selector.err
+cpu_measure.txt
+profile.txt
+*.log

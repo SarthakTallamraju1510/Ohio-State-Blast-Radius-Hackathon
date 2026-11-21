@@ -1,0 +1,9 @@
+{
+  "base_commit": "eb11aec4be8cb2122afe713a4816662c3f0fb2fa",
+  "coverage_contexts": 1611,
+  "covered_lines": 41920,
+  "fixture_rules": 31,
+  "schema": 1,
+  "source_files": 185,
+  "tests": 1620
+}
