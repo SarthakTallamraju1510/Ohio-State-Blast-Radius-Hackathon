@@ -51,6 +51,7 @@ class Change:
     old_lines: set[int] = field(default_factory=set)
     anchors: set[int] = field(default_factory=set)
     new_lines: set[int] = field(default_factory=set)
+    deleted: bool = False
 
     @property
     def interesting(self) -> bool:
@@ -196,6 +197,7 @@ def parse_patch(text: str) -> dict[str, Change]:
     header_path: str | None = None
     old_line = new_line = 0
     remaining_old = remaining_new = 0
+    in_hunk = False
 
     for raw in text.splitlines():
         if raw.startswith("diff --git "):
@@ -204,61 +206,87 @@ def parse_patch(text: str) -> dict[str, Change]:
             current = files.setdefault(header_path, Change()) if header_path else None
             old_line = new_line = 0
             remaining_old = remaining_new = 0
+            in_hunk = False
             continue
+        if in_hunk:
+            # Hunk content is classified before file headers: a removed Python
+            # comment such as ``-- note`` appears as ``--- note`` in the diff,
+            # and an added line can likewise begin with ``+++``.  Treating those
+            # as headers would silently change which lines are analysed.
+            if raw.startswith("\\ No newline"):
+                continue
+            if raw.startswith("-"):
+                if current is not None:
+                    current.removed.append(raw[1:])
+                    current.old_lines.add(old_line)
+                old_line += 1
+                remaining_old = max(0, remaining_old - 1)
+                in_hunk = remaining_old > 0 or remaining_new > 0
+                continue
+            if raw.startswith("+"):
+                if current is not None:
+                    current.added.append(raw[1:])
+                    current.anchors.add(old_line)
+                    current.new_lines.add(new_line)
+                new_line += 1
+                remaining_new = max(0, remaining_new - 1)
+                in_hunk = remaining_old > 0 or remaining_new > 0
+                continue
+            if raw.startswith(" "):
+                if current is not None:
+                    current.context.append(raw[1:])
+                old_line += 1
+                new_line += 1
+                remaining_old = max(0, remaining_old - 1)
+                remaining_new = max(0, remaining_new - 1)
+                in_hunk = remaining_old > 0 or remaining_new > 0
+                continue
+            if not raw:
+                # An empty context line is normally represented by a single
+                # space, but tolerate patches that omit that space.
+                if current is not None:
+                    current.context.append("")
+                old_line += 1
+                new_line += 1
+                remaining_old = max(0, remaining_old - 1)
+                remaining_new = max(0, remaining_new - 1)
+                in_hunk = remaining_old > 0 or remaining_new > 0
+                continue
+            # The hunk ended early (or the counts were malformed).  Let the
+            # header handling below decide what this line is.
+            in_hunk = False
         if raw.startswith("--- "):
-            if raw.startswith("--- a/"):
-                header_path = raw[6:].strip()
-            elif raw.startswith("--- /dev/null"):
+            if raw.startswith("--- /dev/null"):
                 header_path = None
+            elif raw.startswith("--- a/"):
+                header_path = raw[6:].strip()
+            else:
+                header_path = raw[4:].strip()
             continue
         if raw.startswith("+++ "):
-            if raw.startswith("+++ b/"):
+            if raw.startswith("+++ /dev/null"):
+                if current is not None:
+                    current.deleted = True
+            elif raw.startswith("+++ b/"):
                 header_path = raw[6:].strip()
                 current = files.setdefault(header_path, Change())
-            elif raw.startswith("+++ /dev/null"):
-                current = files.setdefault(header_path, Change()) if header_path else None
+            else:
+                header_path = raw[4:].strip()
+                current = files.setdefault(header_path, Change())
             continue
         if raw.startswith("@@ "):
             match = HUNK_RE.match(raw)
             if not match or not header_path:
                 current = None
+                in_hunk = False
                 continue
             old_line = int(match.group(1))
             new_line = int(match.group(3))
             remaining_old = int(match.group(2) or 1)
             remaining_new = int(match.group(4) or 1)
             current = files.setdefault(header_path, Change())
+            in_hunk = remaining_old > 0 or remaining_new > 0
             continue
-        if current is None:
-            continue
-        if raw.startswith("\\ No newline"):
-            continue
-        if raw.startswith("-"):
-            current.removed.append(raw[1:])
-            current.old_lines.add(old_line)
-            old_line += 1
-            remaining_old = max(0, remaining_old - 1)
-        elif raw.startswith("+"):
-            current.added.append(raw[1:])
-            current.anchors.add(old_line)
-            current.new_lines.add(new_line)
-            new_line += 1
-            remaining_new = max(0, remaining_new - 1)
-        elif raw.startswith(" "):
-            current.context.append(raw[1:])
-            old_line += 1
-            new_line += 1
-            remaining_old = max(0, remaining_old - 1)
-            remaining_new = max(0, remaining_new - 1)
-        elif not raw:
-            # An empty context line is normally represented by a single space,
-            # but tolerate patches that omit that space.
-            old_line += 1
-            new_line += 1
-        if remaining_old == 0 and remaining_new == 0:
-            # Stay on the file for a following hunk header; do not let footer
-            # text be mistaken for hunk content.
-            pass
     return files
 
 
@@ -384,6 +412,13 @@ def select(
             # in that file is a candidate.  This is deliberately conservative.
             recognized = True
             selected.update(tests.test_file_numbers[file])
+            continue
+        if file.startswith(("sqlglot/", "sqlglotc/")) and change.deleted:
+            # Deleting a source module can break imports without any covered
+            # line remaining in the base map.  No base test set is provably
+            # sufficient, so retain recall with the full suite.
+            recognized = True
+            selected.update(tests.numbers)
             continue
         if file.startswith("tests/fixtures/"):
             recognized = True

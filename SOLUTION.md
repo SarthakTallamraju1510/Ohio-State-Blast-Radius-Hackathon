@@ -98,9 +98,25 @@ the final selector is 4.9 s above it. The remaining extra selections are
 edge-case local changes whose covering tests do not happen to fail on the
 sample. They are retained because excluding them would risk unseen commits.
 
-Measured selector CPU with `time.process_time` was approximately 0.03 s. Peak
-traced memory was approximately 25.7 MB. Three consecutive runs produced
-byte-identical output.
+Final pre-submission validation measured three consecutive runs:
+
+| run | simulated | selector CPU | combined | misses |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 99.274 s | 0.078125 s | 99.352125 s | 0 |
+| 2 | 99.274 s | 0.062500 s | 99.336500 s | 0 |
+| 3 | 99.274 s | 0.062500 s | 99.336500 s | 0 |
+
+The median combined total was 99.3365 s, which rounds to **99.3 s**. Output was
+byte-identical across all three runs. Native peak RSS was approximately
+41.5 MiB. The CPU figure is native Windows process user+kernel time, not the
+container CPU the server will charge; Docker/container validation remains
+outstanding.
+
+Exact partition search confirmed that the scheduler's result is optimal for
+every non-empty sample commit. The dominant 21.454 s `test_execute_tpcds` test
+sets a makespan floor on the two large commits (`2jrq`, `3utz`), so no worker
+repartition can improve them. The small remaining selection overhead is the
+2 s per-worker charge for 22 non-empty commits (44.0 s total).
 
 These are **local sample measurements**, not an official leaderboard result.
 The unseen final patch set may include behaviors not represented by the 30
@@ -118,10 +134,11 @@ sample patches.
   `DATA_DIR=/data`;
 - writes nothing and needs no network at runtime.
 
-The current development host has neither Docker nor `make`, so the image was
-**not built or run here**. The local selector was exercised directly under the
-sample data. The Docker path and the official container CPU measurement remain
-unverified.
+The current development host has neither Docker, Podman, GNU `make`, nor a WSL
+distribution, so the image was **not built or run here**. The local selector was
+exercised directly under the sample data. The Docker path, `nobody` execution,
+read-only container filesystem and official container CPU measurement remain
+unverified. Do not treat the native measurements above as a Docker result.
 
 ## Reproduction and checks
 
@@ -135,3 +152,9 @@ python score.py sample sample/answers.json sample_output.jsonl --cpu-seconds 0.0
 ```
 
 `make sample` is the intended clean container check when Docker is available.
+
+Additional edge-case checks cover empty and malformed patches, source deletion,
+new source files, CRLF input, missing final newlines and hunk content whose text
+begins with `---` or `+++`. Malformed/empty patches, deleted source modules and
+new source files fall back to the full suite; comment/identity/`copy=` no-ops
+remain empty.
